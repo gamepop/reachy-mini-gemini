@@ -15,11 +15,13 @@ import logging
 import os
 import struct
 import threading
+import time
 import traceback
 from typing import Optional
 
 import cv2
 import numpy as np
+from scipy import signal
 
 from google import genai
 from google.genai import types
@@ -29,11 +31,11 @@ from reachy_mini_gemini_app.movements import MovementController
 
 logger = logging.getLogger(__name__)
 
-# Audio configuration
+# Audio configuration (defaults, can be overridden via CLI)
 SEND_SAMPLE_RATE = 16000
 RECEIVE_SAMPLE_RATE = 24000
 CHANNELS = 1
-CHUNK_SIZE = 1024
+DEFAULT_CHUNK_SIZE = 512
 
 # Gemini model for native audio
 MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
@@ -47,19 +49,30 @@ except ImportError:
     pyaudio = None
 
 SYSTEM_INSTRUCTION = """You are Reachy Mini, a small expressive robot made by Pollen Robotics.
-You have a head that can move and two antennas on top.
+You have a head that can move in all directions and two antennas on top that can express emotions.
 
 Personality:
 - You are friendly, curious, and playful
 - You enjoy having conversations with humans
-- You occasionally make robot sounds or express emotions through movement
+- You express yourself through head movements and antenna positions
 - Keep responses concise since you're speaking them aloud
 
-When you want to express emotions or move, use the available tools:
-- move_head: to look in different directions
-- express_emotion: to show happiness, curiosity, surprise, etc.
+Available movement tools - use them frequently to be expressive:
+- move_head: Look in a direction (left, right, up, down, center)
+- move_head_precise: Fine control over head orientation with roll, pitch, yaw angles
+- express_emotion: Express emotions (happy, sad, surprised, curious, excited, sleepy, confused, angry, love)
+- move_antennas: Control antenna angles individually
+- antenna_expression: Quick antenna presets (neutral, alert, droopy, asymmetric, perky)
+- nod_yes: Nod your head yes
+- shake_no: Shake your head no
+- tilt_head: Tilt head to one side (curious look)
+- look_at_camera: Look directly at the person
+- do_dance: Dance! (default, happy, or silly style)
+- wake_up: Wake up animation
+- go_to_sleep: Sleep animation
+- reset_position: Return to neutral pose
 
-Always be helpful and engaging in conversation!"""
+Be expressive! Move your head and antennas while talking to show engagement and emotion."""
 
 
 class GeminiLiveHandler:
@@ -72,6 +85,15 @@ class GeminiLiveHandler:
         movement_controller: MovementController,
         use_camera: bool = True,
         use_robot_audio: bool = False,
+        # Audio settings
+        mic_gain: float = 3.0,
+        chunk_size: int = 512,
+        send_queue_size: int = 5,
+        recv_queue_size: int = 8,
+        # Video settings
+        camera_fps: float = 1.0,
+        jpeg_quality: int = 50,
+        camera_width: int = 640,
     ):
         """Initialize the Gemini Live handler.
 
@@ -81,11 +103,34 @@ class GeminiLiveHandler:
             movement_controller: Controller for robot movements
             use_camera: Whether to enable camera/vision capabilities
             use_robot_audio: Whether to use Reachy Mini's mic/speaker instead of local
+            mic_gain: Microphone gain multiplier
+            chunk_size: Audio chunk size in samples
+            send_queue_size: Output queue size
+            recv_queue_size: Input queue size
+            camera_fps: Frames per second for camera
+            jpeg_quality: JPEG compression quality
+            camera_width: Max camera frame width
         """
         self.robot = robot
         self.movement_controller = movement_controller
         self.use_camera = use_camera
         self.use_robot_audio = use_robot_audio
+
+        # Configurable audio settings
+        self.mic_gain = mic_gain
+        self.chunk_size = chunk_size
+        self.send_queue_size = send_queue_size
+        self.recv_queue_size = recv_queue_size
+
+        # Configurable video settings
+        self.camera_fps = camera_fps
+        self.jpeg_quality = jpeg_quality
+        self.camera_width = camera_width
+
+        # Log configuration
+        logger.info(f"Audio config: mic_gain={mic_gain}, chunk_size={chunk_size}")
+        logger.info(f"Queue config: send={send_queue_size}, recv={recv_queue_size}")
+        logger.info(f"Video config: fps={camera_fps}, quality={jpeg_quality}, width={camera_width}")
 
         # Initialize Gemini client with v1beta API
         self.client = genai.Client(
@@ -109,7 +154,6 @@ class GeminiLiveHandler:
         self.out_queue: Optional[asyncio.Queue] = None
 
         # Camera frame rate control
-        self.camera_fps = 1.0  # Send 1 frame per second to Gemini
         self.last_frame_time = 0
 
         # Define tools for the model
@@ -133,6 +177,28 @@ class GeminiLiveHandler:
             ),
         )
 
+        move_head_precise_tool = types.FunctionDeclaration(
+            name="move_head_precise",
+            description="Move head to precise orientation angles. Roll tilts head sideways, pitch looks up/down, yaw turns left/right.",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "roll": types.Schema(
+                        type=types.Type.NUMBER,
+                        description="Roll angle in degrees (-30 to 30). Positive tilts right.",
+                    ),
+                    "pitch": types.Schema(
+                        type=types.Type.NUMBER,
+                        description="Pitch angle in degrees (-30 to 30). Positive looks down.",
+                    ),
+                    "yaw": types.Schema(
+                        type=types.Type.NUMBER,
+                        description="Yaw angle in degrees (-45 to 45). Positive turns right.",
+                    ),
+                },
+            ),
+        )
+
         express_emotion_tool = types.FunctionDeclaration(
             name="express_emotion",
             description="Express an emotion through head movement and antennas",
@@ -141,7 +207,7 @@ class GeminiLiveHandler:
                 properties={
                     "emotion": types.Schema(
                         type=types.Type.STRING,
-                        enum=["happy", "sad", "surprised", "curious", "excited", "sleepy"],
+                        enum=["happy", "sad", "surprised", "curious", "excited", "sleepy", "confused", "angry", "love"],
                         description="Emotion to express",
                     ),
                 },
@@ -149,7 +215,156 @@ class GeminiLiveHandler:
             ),
         )
 
-        return [types.Tool(function_declarations=[move_head_tool, express_emotion_tool])]
+        move_antennas_tool = types.FunctionDeclaration(
+            name="move_antennas",
+            description="Move antennas to specific angles",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "right_angle": types.Schema(
+                        type=types.Type.NUMBER,
+                        description="Right antenna angle in degrees (-90 to 90)",
+                    ),
+                    "left_angle": types.Schema(
+                        type=types.Type.NUMBER,
+                        description="Left antenna angle in degrees (-90 to 90)",
+                    ),
+                },
+            ),
+        )
+
+        antenna_expression_tool = types.FunctionDeclaration(
+            name="antenna_expression",
+            description="Set antennas to a preset expression",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "expression": types.Schema(
+                        type=types.Type.STRING,
+                        enum=["neutral", "alert", "droopy", "asymmetric", "perky"],
+                        description="Antenna expression preset",
+                    ),
+                },
+                required=["expression"],
+            ),
+        )
+
+        nod_yes_tool = types.FunctionDeclaration(
+            name="nod_yes",
+            description="Nod head up and down to indicate yes or agreement",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "times": types.Schema(
+                        type=types.Type.INTEGER,
+                        description="Number of nods (1-5, default 2)",
+                    ),
+                },
+            ),
+        )
+
+        shake_no_tool = types.FunctionDeclaration(
+            name="shake_no",
+            description="Shake head left and right to indicate no or disagreement",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "times": types.Schema(
+                        type=types.Type.INTEGER,
+                        description="Number of shakes (1-5, default 2)",
+                    ),
+                },
+            ),
+        )
+
+        tilt_head_tool = types.FunctionDeclaration(
+            name="tilt_head",
+            description="Tilt head to one side, like a curious dog",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "direction": types.Schema(
+                        type=types.Type.STRING,
+                        enum=["left", "right"],
+                        description="Direction to tilt",
+                    ),
+                    "angle": types.Schema(
+                        type=types.Type.NUMBER,
+                        description="Tilt angle in degrees (5-30, default 20)",
+                    ),
+                },
+                required=["direction"],
+            ),
+        )
+
+        look_at_camera_tool = types.FunctionDeclaration(
+            name="look_at_camera",
+            description="Look directly at the camera/person",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={},
+            ),
+        )
+
+        do_dance_tool = types.FunctionDeclaration(
+            name="do_dance",
+            description="Perform a fun dance animation",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "style": types.Schema(
+                        type=types.Type.STRING,
+                        enum=["default", "happy", "silly"],
+                        description="Dance style (default: default)",
+                    ),
+                },
+            ),
+        )
+
+        wake_up_tool = types.FunctionDeclaration(
+            name="wake_up",
+            description="Perform wake up animation - use when greeting someone or starting a conversation",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={},
+            ),
+        )
+
+        go_to_sleep_tool = types.FunctionDeclaration(
+            name="go_to_sleep",
+            description="Perform sleep animation - use when saying goodbye or ending conversation",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={},
+            ),
+        )
+
+        reset_position_tool = types.FunctionDeclaration(
+            name="reset_position",
+            description="Reset head and antennas to neutral position",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={},
+            ),
+        )
+
+        all_tools = [
+            move_head_tool,
+            move_head_precise_tool,
+            express_emotion_tool,
+            move_antennas_tool,
+            antenna_expression_tool,
+            nod_yes_tool,
+            shake_no_tool,
+            tilt_head_tool,
+            look_at_camera_tool,
+            do_dance_tool,
+            wake_up_tool,
+            go_to_sleep_tool,
+            reset_position_tool,
+        ]
+
+        return [types.Tool(function_declarations=all_tools)]
 
     async def _handle_tool_call(self, tool_call) -> str:
         """Handle a function call from the model."""
@@ -161,15 +376,58 @@ class GeminiLiveHandler:
         try:
             if name == "move_head":
                 direction = args.get("direction", "center")
-                await self.movement_controller.move_head(direction)
-                return f"Moved head {direction}"
+                return await self.movement_controller.move_head(direction)
+
+            elif name == "move_head_precise":
+                roll = args.get("roll", 0)
+                pitch = args.get("pitch", 0)
+                yaw = args.get("yaw", 0)
+                return await self.movement_controller.move_head_precise(roll, pitch, yaw)
 
             elif name == "express_emotion":
                 emotion = args.get("emotion", "happy")
-                await self.movement_controller.express_emotion(emotion)
-                return f"Expressed {emotion}"
+                return await self.movement_controller.express_emotion(emotion)
+
+            elif name == "move_antennas":
+                right_angle = args.get("right_angle", 0)
+                left_angle = args.get("left_angle", 0)
+                return await self.movement_controller.move_antennas(right_angle, left_angle)
+
+            elif name == "antenna_expression":
+                expression = args.get("expression", "neutral")
+                return await self.movement_controller.antenna_expression(expression)
+
+            elif name == "nod_yes":
+                times = args.get("times", 2)
+                return await self.movement_controller.nod_yes(times)
+
+            elif name == "shake_no":
+                times = args.get("times", 2)
+                return await self.movement_controller.shake_no(times)
+
+            elif name == "tilt_head":
+                direction = args.get("direction", "left")
+                angle = args.get("angle", 20)
+                return await self.movement_controller.tilt_head(direction, angle)
+
+            elif name == "look_at_camera":
+                return await self.movement_controller.look_at_camera()
+
+            elif name == "do_dance":
+                style = args.get("style", "default")
+                return await self.movement_controller.do_dance(style)
+
+            elif name == "wake_up":
+                return await self.movement_controller.wake_up()
+
+            elif name == "go_to_sleep":
+                return await self.movement_controller.go_to_sleep()
+
+            elif name == "reset_position":
+                return await self.movement_controller.reset_position()
 
             else:
+                logger.warning(f"Unknown tool: {name}")
                 return f"Unknown tool: {name}"
 
         except Exception as e:
@@ -200,19 +458,19 @@ class GeminiLiveHandler:
             rate=SEND_SAMPLE_RATE,
             input=True,
             input_device_index=mic_info["index"],
-            frames_per_buffer=CHUNK_SIZE,
+            frames_per_buffer=self.chunk_size,
         )
 
         kwargs = {"exception_on_overflow": False}
 
         while True:
-            data = await asyncio.to_thread(self.audio_stream.read, CHUNK_SIZE, **kwargs)
+            data = await asyncio.to_thread(self.audio_stream.read, self.chunk_size, **kwargs)
             await self.out_queue.put({"data": data, "mime_type": "audio/pcm"})
 
     async def _listen_audio_robot(self) -> None:
         """Capture audio from Reachy Mini's microphone."""
         # Check if audio is actually available
-        if not hasattr(self.robot.media, '_audio') or self.robot.media._audio is None:
+        if not hasattr(self.robot.media, 'audio') or self.robot.media.audio is None:
             logger.warning("Robot audio not available, falling back to local audio")
             self.use_robot_audio = False
             await self._listen_audio_local()
@@ -221,26 +479,46 @@ class GeminiLiveHandler:
         logger.info("Starting Reachy Mini microphone recording...")
         await asyncio.to_thread(self.robot.media.start_recording)
 
+        # Audio gain from config
+        mic_gain = self.mic_gain
+
         while True:
             try:
                 # Get audio sample from robot (bytes or numpy array)
                 sample = await asyncio.to_thread(self.robot.media.get_audio_sample)
 
                 if sample is None:
-                    await asyncio.sleep(0.01)
+                    await asyncio.sleep(0.005)
                     continue
 
                 # Convert to bytes if numpy array
                 if isinstance(sample, np.ndarray):
-                    # Convert float32 to int16 PCM
+                    # Robot sends stereo float32, convert to mono
                     if sample.dtype == np.float32:
+                        # If stereo (shape is (N, 2)), convert to mono
+                        if len(sample.shape) == 2 and sample.shape[1] == 2:
+                            sample = np.mean(sample, axis=1)
+
+                        # Apply gain and clip to prevent distortion
+                        sample = sample * mic_gain
+                        sample = np.clip(sample, -1.0, 1.0)
+
+                        # Convert to int16 PCM
                         sample = (sample * 32767).astype(np.int16)
                     data = sample.tobytes()
                 else:
                     data = sample
 
                 if data:
-                    await self.out_queue.put({"data": data, "mime_type": "audio/pcm"})
+                    try:
+                        self.out_queue.put_nowait({"data": data, "mime_type": "audio/pcm"})
+                    except asyncio.QueueFull:
+                        # Drop old audio to keep stream fresh
+                        try:
+                            self.out_queue.get_nowait()
+                            self.out_queue.put_nowait({"data": data, "mime_type": "audio/pcm"})
+                        except Exception:
+                            pass
 
             except Exception as e:
                 logger.debug(f"Audio capture error: {e}")
@@ -255,38 +533,58 @@ class GeminiLiveHandler:
     async def receive_audio(self) -> None:
         """Receive responses from Gemini and handle them."""
         while True:
-            turn = self.session.receive()
-            async for response in turn:
-                # Handle audio data
-                if data := response.data:
-                    self.audio_in_queue.put_nowait(data)
-                    continue
+            try:
+                turn = self.session.receive()
+                async for response in turn:
+                    # Handle audio data
+                    if data := response.data:
+                        try:
+                            self.audio_in_queue.put_nowait(data)
+                        except asyncio.QueueFull:
+                            # Drop oldest audio to make room
+                            try:
+                                self.audio_in_queue.get_nowait()
+                                self.audio_in_queue.put_nowait(data)
+                            except Exception:
+                                pass
+                        continue
 
-                # Handle text (print transcription)
-                if text := response.text:
-                    print(text, end="", flush=True)
+                    # Handle text (print transcription)
+                    if hasattr(response, 'text') and response.text:
+                        print(response.text, end="", flush=True)
 
-                # Handle tool calls
-                if hasattr(response, 'tool_call') and response.tool_call:
-                    for fc in response.tool_call.function_calls:
-                        result = await self._handle_tool_call(fc)
-                        await self.session.send(
-                            input=types.LiveClientToolResponse(
-                                function_responses=[
-                                    types.FunctionResponse(
-                                        name=fc.name,
-                                        id=fc.id,
-                                        response={"result": result},
+                    # Handle tool calls
+                    if hasattr(response, 'tool_call') and response.tool_call:
+                        for fc in response.tool_call.function_calls:
+                            logger.debug(f"Processing tool call: {fc.name}")
+                            result = await self._handle_tool_call(fc)
+                            logger.debug(f"Tool result: {result}")
+
+                            # Send tool response back to Gemini
+                            try:
+                                await self.session.send(
+                                    input=types.LiveClientToolResponse(
+                                        function_responses=[
+                                            types.FunctionResponse(
+                                                name=fc.name,
+                                                id=fc.id,
+                                                response={"result": result},
+                                            )
+                                        ]
                                     )
-                                ]
-                            )
-                        )
+                                )
+                            except Exception as e:
+                                logger.error(f"Failed to send tool response: {e}")
 
-            # Only clear queue if user interrupted (queue is large)
-            # This prevents cutting off normal responses
-            if self.audio_in_queue.qsize() > 10:
-                while not self.audio_in_queue.empty():
-                    self.audio_in_queue.get_nowait()
+                # Only clear queue if user interrupted (queue is full)
+                # This prevents cutting off normal responses
+                if self.audio_in_queue.qsize() > self.recv_queue_size - 2:
+                    while not self.audio_in_queue.empty():
+                        self.audio_in_queue.get_nowait()
+
+            except Exception as e:
+                logger.warning(f"Receive audio error: {e}")
+                await asyncio.sleep(0.1)
 
     async def play_audio(self) -> None:
         """Play received audio from queue."""
@@ -321,7 +619,7 @@ class GeminiLiveHandler:
     async def _play_audio_robot(self) -> None:
         """Play audio through Reachy Mini's speaker."""
         # Check if audio is actually available
-        if not hasattr(self.robot.media, '_audio') or self.robot.media._audio is None:
+        if not hasattr(self.robot.media, 'audio') or self.robot.media.audio is None:
             logger.warning("Robot speaker not available, falling back to local audio")
             self.use_robot_audio = False
             await self._play_audio_local()
@@ -329,6 +627,9 @@ class GeminiLiveHandler:
 
         logger.info("Starting Reachy Mini speaker playback...")
         await asyncio.to_thread(self.robot.media.start_playing)
+
+        # Robot expects 16kHz, Gemini sends 24kHz
+        ROBOT_SAMPLE_RATE = 16000
 
         while True:
             try:
@@ -339,7 +640,11 @@ class GeminiLiveHandler:
                 audio_int16 = np.frombuffer(bytestream, dtype=np.int16)
                 audio_float32 = audio_int16.astype(np.float32) / 32767.0
 
-                await asyncio.to_thread(self.robot.media.push_audio_sample, audio_float32)
+                # Resample from 24kHz to 16kHz
+                num_samples = int(len(audio_float32) * ROBOT_SAMPLE_RATE / RECEIVE_SAMPLE_RATE)
+                audio_resampled = signal.resample(audio_float32, num_samples)
+
+                await asyncio.to_thread(self.robot.media.push_audio_sample, audio_resampled.astype(np.float32))
 
             except Exception as e:
                 logger.debug(f"Audio playback error: {e}")
@@ -348,20 +653,28 @@ class GeminiLiveHandler:
     async def stream_camera(self) -> None:
         """Stream camera frames to Gemini."""
         if not self.use_camera:
+            # Keep task alive but do nothing
+            while True:
+                await asyncio.sleep(10)
             return
 
         # Check if camera is actually available
         if not hasattr(self.robot.media, 'camera') or self.robot.media.camera is None:
             logger.warning("Robot camera not available, disabling camera streaming")
             self.use_camera = False
+            # Keep task alive
+            while True:
+                await asyncio.sleep(10)
             return
 
         logger.info("Starting camera streaming...")
-        import time
+
+        # Wait for WebRTC to establish before checking camera
+        await asyncio.sleep(3.0)
 
         # Track consecutive failures to avoid spam
         consecutive_failures = 0
-        max_failures = 5
+        max_failures = 30  # Give more time for WebRTC camera stream
 
         while True:
             try:
@@ -378,41 +691,38 @@ class GeminiLiveHandler:
                 if frame is None:
                     consecutive_failures += 1
                     if consecutive_failures >= max_failures:
-                        logger.warning("Camera not responding, disabling camera streaming")
-                        self.use_camera = False
-                        return
-                    await asyncio.sleep(0.1)
+                        if consecutive_failures == max_failures:
+                            logger.warning("Camera not responding, will keep retrying...")
+                    await asyncio.sleep(0.5)
                     continue
 
                 consecutive_failures = 0
                 self.last_frame_time = current_time
 
-                # Resize frame for efficiency (640x480 max)
+                # Resize frame for efficiency
                 h, w = frame.shape[:2]
-                if w > 640:
-                    scale = 640 / w
-                    frame = cv2.resize(frame, (640, int(h * scale)))
+                if w > self.camera_width:
+                    scale = self.camera_width / w
+                    frame = cv2.resize(frame, (self.camera_width, int(h * scale)))
 
-                # Encode as JPEG
-                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                # Encode as JPEG with configurable quality
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
                 image_bytes = buffer.tobytes()
 
-                # Send to Gemini
-                await self.out_queue.put({
-                    "data": image_bytes,
-                    "mime_type": "image/jpeg"
-                })
-
-                logger.debug(f"Sent camera frame ({len(image_bytes)} bytes)")
+                # Send to Gemini (non-blocking, skip if queue full)
+                try:
+                    self.out_queue.put_nowait({
+                        "data": image_bytes,
+                        "mime_type": "image/jpeg"
+                    })
+                    logger.debug(f"Sent camera frame ({len(image_bytes)} bytes)")
+                except asyncio.QueueFull:
+                    logger.debug("Skipping camera frame, queue full")
 
             except Exception as e:
                 logger.debug(f"Camera streaming error: {e}")
                 consecutive_failures += 1
-                if consecutive_failures >= max_failures:
-                    logger.warning("Camera errors, disabling camera streaming")
-                    self.use_camera = False
-                    return
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.5)
 
     async def run(self, stop_event: threading.Event) -> None:
         """Run the conversation loop with auto-reconnection.
@@ -441,8 +751,8 @@ class GeminiLiveHandler:
                     asyncio.TaskGroup() as tg,
                 ):
                     self.session = session
-                    self.audio_in_queue = asyncio.Queue()
-                    self.out_queue = asyncio.Queue(maxsize=10)
+                    self.audio_in_queue = asyncio.Queue(maxsize=self.recv_queue_size)
+                    self.out_queue = asyncio.Queue(maxsize=self.send_queue_size)
 
                     audio_source = "robot" if self.use_robot_audio else "local"
                     camera_status = "enabled" if self.use_camera else "disabled"
@@ -470,6 +780,10 @@ class GeminiLiveHandler:
                 break
             except ExceptionGroup as EG:
                 await self._cleanup_streams()
+                # Log what caused the exception group
+                for exc in EG.exceptions:
+                    logger.warning(f"Task exception: {type(exc).__name__}: {exc}")
+                    logger.debug(traceback.format_exception(exc))
                 # Check if it's a connection error - reconnect
                 logger.warning("Connection lost, reconnecting in 2 seconds...")
                 print("\n⚠️ Connection lost. Reconnecting...\n")

@@ -14,6 +14,7 @@ dependencies = [
     "numpy",
     "opencv-python",
     "scipy",
+    "python-dotenv",
 ]
 
 [project.optional-dependencies]
