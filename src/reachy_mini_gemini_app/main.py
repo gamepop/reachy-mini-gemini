@@ -12,6 +12,10 @@ import threading
 import time
 from typing import Optional
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from reachy_mini import ReachyMini, ReachyMiniApp
 
 from reachy_mini_gemini_app.gemini_handler import GeminiLiveHandler
@@ -23,7 +27,12 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Reachy Mini Gemini Live App")
+    parser = argparse.ArgumentParser(
+        description="Reachy Mini Gemini Live App",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+
+    # Basic options
     parser.add_argument(
         "--debug", action="store_true", help="Enable debug logging"
     )
@@ -37,6 +46,41 @@ def parse_args() -> argparse.Namespace:
         "--robot-audio", action="store_true",
         help="Use Reachy Mini's microphone and speaker instead of local audio"
     )
+
+    # Audio tuning
+    audio_group = parser.add_argument_group("Audio Settings")
+    audio_group.add_argument(
+        "--mic-gain", type=float, default=3.0,
+        help="Microphone gain multiplier (1.0-10.0)"
+    )
+    audio_group.add_argument(
+        "--chunk-size", type=int, default=512,
+        help="Audio chunk size in samples (256-2048)"
+    )
+    audio_group.add_argument(
+        "--send-queue-size", type=int, default=5,
+        help="Output queue size for sending audio/video (1-20)"
+    )
+    audio_group.add_argument(
+        "--recv-queue-size", type=int, default=8,
+        help="Input queue size for receiving audio (1-20)"
+    )
+
+    # Camera/Video tuning
+    video_group = parser.add_argument_group("Video Settings")
+    video_group.add_argument(
+        "--camera-fps", type=float, default=1.0,
+        help="Camera frames per second to send (0.5-5.0)"
+    )
+    video_group.add_argument(
+        "--jpeg-quality", type=int, default=50,
+        help="JPEG compression quality (10-95)"
+    )
+    video_group.add_argument(
+        "--camera-width", type=int, default=640,
+        help="Max camera frame width (320-1280)"
+    )
+
     return parser.parse_args()
 
 
@@ -60,6 +104,15 @@ async def run_conversation(
         movement_controller=movement_controller,
         use_camera=not args.no_camera,
         use_robot_audio=args.robot_audio,
+        # Audio settings
+        mic_gain=args.mic_gain,
+        chunk_size=args.chunk_size,
+        send_queue_size=args.send_queue_size,
+        recv_queue_size=args.recv_queue_size,
+        # Video settings
+        camera_fps=args.camera_fps,
+        jpeg_quality=args.jpeg_quality,
+        camera_width=args.camera_width,
     )
 
     logger.info("Starting Gemini Live session...")
