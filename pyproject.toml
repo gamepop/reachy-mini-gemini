@@ -40,7 +40,7 @@ dev = [
 [project.scripts]
 reachy-mini-gemini = "reachy_mini_gemini_app.main:main"
 
-[project.entry-points."reachy_mini.apps"]
+[project.entry-points."reachy_mini_apps"]
 reachy_mini_gemini_app = "reachy_mini_gemini_app.main:ReachyMiniGeminiApp"
 
 [tool.setuptools.packages.find]
