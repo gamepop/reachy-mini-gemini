@@ -18,8 +18,10 @@ load_dotenv()
 
 from reachy_mini import ReachyMini, ReachyMiniApp
 
+from reachy_mini_gemini_app.config import get_api_key, load_settings
 from reachy_mini_gemini_app.gemini_handler import GeminiLiveHandler
 from reachy_mini_gemini_app.movements import MovementController
+from reachy_mini_gemini_app.web_server import start_settings_server, stop_settings_server
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -119,9 +121,12 @@ async def run_conversation(
 ) -> None:
     """Run the main conversation loop."""
 
-    api_key = os.getenv("GOOGLE_API_KEY")
+    api_key = get_api_key()
     if not api_key:
-        logger.error("GOOGLE_API_KEY environment variable not set")
+        logger.error(
+            "Google API key not configured. "
+            "Set GOOGLE_API_KEY environment variable or configure via the settings page."
+        )
         return
 
     movement_controller = MovementController(robot)
@@ -187,12 +192,54 @@ def run(
 class ReachyMiniGeminiApp(ReachyMiniApp):
     """Reachy Mini App entry point for Gemini conversation."""
 
-    custom_app_url = None  # No web UI for now
-    dont_start_webserver = True
+    custom_app_url = "http://0.0.0.0:8042"  # Settings page URL
+    dont_start_webserver = False
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
         """Run the app."""
-        run(robot=reachy_mini, stop_event=stop_event)
+        # Start the settings web server
+        try:
+            start_settings_server(port=8042)
+            logger.info("Settings page available at http://0.0.0.0:8042")
+        except Exception as e:
+            logger.warning(f"Could not start settings server: {e}")
+
+        try:
+            run_with_config(robot=reachy_mini, stop_event=stop_event)
+        finally:
+            stop_settings_server()
+
+
+def run_with_config(
+    robot: ReachyMini,
+    stop_event: threading.Event,
+) -> None:
+    """Run the app using settings from config file (for dashboard mode)."""
+    settings = load_settings()
+
+    # Create a namespace object from config settings
+    args = argparse.Namespace(
+        debug=False,
+        wireless=True,  # Dashboard always uses wireless
+        no_camera=not settings.get("use_camera", True),
+        robot_audio=settings.get("robot_audio", False),
+        holiday_cheer=settings.get("holiday_cheer", False),
+        mic_gain=settings.get("mic_gain", 3.0),
+        chunk_size=settings.get("chunk_size", 512),
+        send_queue_size=settings.get("send_queue_size", 5),
+        recv_queue_size=settings.get("recv_queue_size", 8),
+        camera_fps=settings.get("camera_fps", 1.0),
+        jpeg_quality=settings.get("jpeg_quality", 50),
+        camera_width=settings.get("camera_width", 640),
+    )
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        loop.run_until_complete(run_conversation(robot, stop_event, args))
+    finally:
+        loop.close()
 
 
 def create_robot(args: argparse.Namespace) -> ReachyMini:

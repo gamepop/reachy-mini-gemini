@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reachy Mini Gemini - Settings</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --success: #22c55e;
+            --error: #ef4444;
+            --dark: #0f172a;
+            --gray-800: #1e293b;
+            --gray-600: #475569;
+            --gray-400: #94a3b8;
+            --gray-200: #e2e8f0;
+            --white: #ffffff;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--dark);
+            color: var(--gray-200);
+            min-height: 100vh;
+            padding: 24px;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .logo {
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, var(--primary), #ec4899);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            margin: 0 auto 16px;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: var(--gray-400);
+            font-size: 0.9rem;
+        }
+
+        .card {
+            background: var(--gray-800);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 16px;
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .card-icon {
+            width: 40px;
+            height: 40px;
+            background: rgba(99, 102, 241, 0.2);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--gray-400);
+            margin-bottom: 8px;
+        }
+
+        input[type="text"],
+        input[type="password"],
+        input[type="number"],
+        select {
+            width: 100%;
+            padding: 12px 16px;
+            background: var(--dark);
+            border: 1px solid var(--gray-600);
+            border-radius: 10px;
+            color: var(--white);
+            font-size: 1rem;
+            transition: border-color 0.2s;
+        }
+
+        input:focus,
+        select:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .input-hint {
+            font-size: 0.8rem;
+            color: var(--gray-400);
+            margin-top: 6px;
+        }
+
+        .input-hint a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+
+        .toggle-group {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--gray-600);
+        }
+
+        .toggle-group:last-child {
+            border-bottom: none;
+        }
+
+        .toggle-label {
+            font-size: 0.95rem;
+        }
+
+        .toggle-desc {
+            font-size: 0.8rem;
+            color: var(--gray-400);
+            margin-top: 4px;
+        }
+
+        .toggle {
+            position: relative;
+            width: 48px;
+            height: 28px;
+            background: var(--gray-600);
+            border-radius: 14px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .toggle.active {
+            background: var(--primary);
+        }
+
+        .toggle::after {
+            content: '';
+            position: absolute;
+            width: 22px;
+            height: 22px;
+            background: var(--white);
+            border-radius: 50%;
+            top: 3px;
+            left: 3px;
+            transition: transform 0.2s;
+        }
+
+        .toggle.active::after {
+            transform: translateX(20px);
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 14px 28px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: var(--white);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(99, 102, 241, 0.4);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            text-align: center;
+            padding: 12px;
+            border-radius: 10px;
+            margin-top: 16px;
+            display: none;
+        }
+
+        .status.success {
+            display: block;
+            background: rgba(34, 197, 94, 0.1);
+            color: var(--success);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+
+        .status.error {
+            display: block;
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--error);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .status.loading {
+            display: block;
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--primary);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+        }
+
+        .divider {
+            height: 1px;
+            background: var(--gray-600);
+            margin: 20px 0;
+        }
+
+        .range-group {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        input[type="range"] {
+            flex: 1;
+            -webkit-appearance: none;
+            height: 6px;
+            background: var(--gray-600);
+            border-radius: 3px;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: var(--primary);
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .range-value {
+            min-width: 50px;
+            text-align: right;
+            font-weight: 600;
+            color: var(--primary);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">R</div>
+            <h1>Reachy Mini Gemini</h1>
+            <p class="subtitle">Configure your Gemini Live conversation settings</p>
+        </header>
+
+        <form id="settings-form">
+            <!-- API Key Section -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2">
+                            <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
+                        </svg>
+                    </div>
+                    <span class="card-title">API Configuration</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="api-key">Google API Key</label>
+                    <input type="password" id="api-key" name="api_key" placeholder="Enter your Gemini API key">
+                    <p class="input-hint">
+                        Get your API key from <a href="https://aistudio.google.com/apikey" target="_blank">Google AI Studio</a>
+                    </p>
+                </div>
+            </div>
+
+            <!-- Options Section -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2">
+                            <circle cx="12" cy="12" r="3"></circle>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                        </svg>
+                    </div>
+                    <span class="card-title">Options</span>
+                </div>
+
+                <div class="toggle-group">
+                    <div>
+                        <div class="toggle-label">Use Robot Audio</div>
+                        <div class="toggle-desc">Use Reachy's microphone and speaker</div>
+                    </div>
+                    <div class="toggle" id="toggle-robot-audio" data-setting="robot_audio"></div>
+                </div>
+
+                <div class="toggle-group">
+                    <div>
+                        <div class="toggle-label">Enable Camera</div>
+                        <div class="toggle-desc">Send camera feed to Gemini for vision</div>
+                    </div>
+                    <div class="toggle active" id="toggle-camera" data-setting="use_camera"></div>
+                </div>
+
+                <div class="toggle-group">
+                    <div>
+                        <div class="toggle-label">Holiday Cheer Mode</div>
+                        <div class="toggle-desc">Festive personality for special occasions</div>
+                    </div>
+                    <div class="toggle" id="toggle-holiday" data-setting="holiday_cheer"></div>
+                </div>
+            </div>
+
+            <!-- Audio Settings -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2">
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                        </svg>
+                    </div>
+                    <span class="card-title">Audio Settings</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="mic-gain">Microphone Gain</label>
+                    <div class="range-group">
+                        <input type="range" id="mic-gain" name="mic_gain" min="1" max="10" step="0.5" value="3">
+                        <span class="range-value" id="mic-gain-value">3.0x</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Video Settings -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2">
+                            <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                        </svg>
+                    </div>
+                    <span class="card-title">Video Settings</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="camera-fps">Camera FPS</label>
+                    <div class="range-group">
+                        <input type="range" id="camera-fps" name="camera_fps" min="0.5" max="5" step="0.5" value="1">
+                        <span class="range-value" id="camera-fps-value">1.0</span>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="jpeg-quality">JPEG Quality</label>
+                    <div class="range-group">
+                        <input type="range" id="jpeg-quality" name="jpeg_quality" min="10" max="95" step="5" value="50">
+                        <span class="range-value" id="jpeg-quality-value">50%</span>
+                    </div>
+                </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary" id="save-btn">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                    <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                    <polyline points="7 3 7 8 15 8"></polyline>
+                </svg>
+                Save Settings
+            </button>
+
+            <div class="status" id="status"></div>
+        </form>
+    </div>
+
+    <script>
+        // Toggle handling
+        document.querySelectorAll('.toggle').forEach(toggle => {
+            toggle.addEventListener('click', () => {
+                toggle.classList.toggle('active');
+            });
+        });
+
+        // Range slider value display
+        const sliders = {
+            'mic-gain': { suffix: 'x', decimals: 1 },
+            'camera-fps': { suffix: '', decimals: 1 },
+            'jpeg-quality': { suffix: '%', decimals: 0 }
+        };
+
+        Object.keys(sliders).forEach(id => {
+            const slider = document.getElementById(id);
+            const valueDisplay = document.getElementById(`${id}-value`);
+            const config = sliders[id];
+
+            slider.addEventListener('input', () => {
+                const val = parseFloat(slider.value).toFixed(config.decimals);
+                valueDisplay.textContent = `${val}${config.suffix}`;
+            });
+        });
+
+        // Load settings on page load
+        async function loadSettings() {
+            try {
+                const response = await fetch('/api/settings');
+                if (response.ok) {
+                    const settings = await response.json();
+
+                    // API Key (show masked if set)
+                    if (settings.api_key_set) {
+                        document.getElementById('api-key').placeholder = '••••••••••••••••';
+                    }
+
+                    // Toggles
+                    if (settings.robot_audio) {
+                        document.getElementById('toggle-robot-audio').classList.add('active');
+                    }
+                    if (settings.use_camera !== false) {
+                        document.getElementById('toggle-camera').classList.add('active');
+                    } else {
+                        document.getElementById('toggle-camera').classList.remove('active');
+                    }
+                    if (settings.holiday_cheer) {
+                        document.getElementById('toggle-holiday').classList.add('active');
+                    }
+
+                    // Sliders
+                    if (settings.mic_gain) {
+                        document.getElementById('mic-gain').value = settings.mic_gain;
+                        document.getElementById('mic-gain-value').textContent = `${settings.mic_gain.toFixed(1)}x`;
+                    }
+                    if (settings.camera_fps) {
+                        document.getElementById('camera-fps').value = settings.camera_fps;
+                        document.getElementById('camera-fps-value').textContent = settings.camera_fps.toFixed(1);
+                    }
+                    if (settings.jpeg_quality) {
+                        document.getElementById('jpeg-quality').value = settings.jpeg_quality;
+                        document.getElementById('jpeg-quality-value').textContent = `${settings.jpeg_quality}%`;
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to load settings:', e);
+            }
+        }
+
+        // Save settings
+        document.getElementById('settings-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const statusEl = document.getElementById('status');
+            const saveBtn = document.getElementById('save-btn');
+
+            statusEl.className = 'status loading';
+            statusEl.textContent = 'Saving settings...';
+            saveBtn.disabled = true;
+
+            const settings = {
+                api_key: document.getElementById('api-key').value || undefined,
+                robot_audio: document.getElementById('toggle-robot-audio').classList.contains('active'),
+                use_camera: document.getElementById('toggle-camera').classList.contains('active'),
+                holiday_cheer: document.getElementById('toggle-holiday').classList.contains('active'),
+                mic_gain: parseFloat(document.getElementById('mic-gain').value),
+                camera_fps: parseFloat(document.getElementById('camera-fps').value),
+                jpeg_quality: parseInt(document.getElementById('jpeg-quality').value)
+            };
+
+            try {
+                const response = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+
+                if (response.ok) {
+                    statusEl.className = 'status success';
+                    statusEl.textContent = 'Settings saved successfully! Restart the app to apply changes.';
+                    document.getElementById('api-key').value = '';
+                    document.getElementById('api-key').placeholder = '••••••••••••••••';
+                } else {
+                    throw new Error('Failed to save');
+                }
+            } catch (e) {
+                statusEl.className = 'status error';
+                statusEl.textContent = 'Failed to save settings. Please try again.';
+            } finally {
+                saveBtn.disabled = false;
+            }
+        });
+
+        // Load settings on page load
+        loadSettings();
+    </script>
+</body>
+</html>
