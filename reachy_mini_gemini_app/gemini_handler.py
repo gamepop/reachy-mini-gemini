@@ -14,9 +14,11 @@ import io
 import logging
 import os
 import struct
+import tempfile
 import threading
 import time
 import traceback
+import wave
 from typing import Optional
 
 import cv2
@@ -136,6 +138,9 @@ class GeminiLiveHandler:
         self.movement_controller = movement_controller
         self.use_camera = use_camera
         self.use_robot_audio = use_robot_audio
+        # Set when WebRTC audio send is unavailable and playback is
+        # routed through the daemon's REST API instead.
+        self._daemon_audio_fallback = False
         self.holiday_cheer = holiday_cheer
 
         # Configurable audio settings
@@ -604,6 +609,15 @@ class GeminiLiveHandler:
                     while not self.audio_in_queue.empty():
                         self.audio_in_queue.get_nowait()
 
+                    # Draining the queue is enough for streamed playback, but a
+                    # daemon-side utterance is already uploaded and playing --
+                    # it has to be stopped explicitly or it talks over the user.
+                    if self._daemon_audio_fallback:
+                        try:
+                            await asyncio.to_thread(self.robot.media.stop_playing)
+                        except Exception as e:
+                            logger.warning(f"Failed to stop daemon audio: {e}")
+
             except Exception as e:
                 logger.warning(f"Receive audio error: {e}")
                 await asyncio.sleep(0.1)
@@ -650,6 +664,20 @@ class GeminiLiveHandler:
         logger.info("Starting Reachy Mini speaker playback...")
         await asyncio.to_thread(self.robot.media.start_playing)
 
+        # The WebRTC send chain can fail to negotiate (SDK logs "No OPUS sink
+        # pad found on webrtcbin, audio send disabled"). When that happens the
+        # appsrc is never built and push_audio_sample() silently discards every
+        # sample -- the robot stays mute with no error. Detect it up front and
+        # route playback through the daemon's REST API instead.
+        if not self._webrtc_audio_send_ready():
+            logger.error(
+                "Robot speaker: WebRTC audio send chain failed to negotiate "
+                "(no OPUS sink pad); push_audio_sample() would be silently "
+                "discarded. Falling back to daemon-side playback."
+            )
+            await self._play_audio_robot_via_daemon()
+            return
+
         # Robot expects 16kHz, Gemini sends 24kHz
         ROBOT_SAMPLE_RATE = 16000
 
@@ -670,6 +698,73 @@ class GeminiLiveHandler:
 
             except Exception as e:
                 logger.debug(f"Audio playback error: {e}")
+                await asyncio.sleep(0.01)
+
+    def _webrtc_audio_send_ready(self) -> bool:
+        """Whether the WebRTC audio send chain actually negotiated.
+
+        The GStreamer WebRTC client builds its send-side ``appsrc`` only after
+        it finds an OPUS sink pad on ``webrtcbin``. If negotiation failed the
+        attribute stays ``None`` and every push_audio_sample() is dropped with
+        just a log warning, so this is the only reliable signal.
+        """
+        audio = getattr(self.robot.media, "audio", None)
+        if audio is None:
+            return False
+        if not hasattr(audio, "_appsrc"):
+            # A backend without the attribute (e.g. local ALSA) does its own
+            # thing; assume it works rather than forcing a needless fallback.
+            return True
+        return audio._appsrc is not None
+
+    def _write_wav(self, pcm: bytes, path: str) -> None:
+        """Write 16-bit mono PCM at Gemini's output rate to a WAV file."""
+        with wave.open(path, "wb") as wf:
+            wf.setnchannels(CHANNELS)
+            wf.setsampwidth(2)
+            wf.setframerate(RECEIVE_SAMPLE_RATE)
+            wf.writeframes(pcm)
+
+    async def _play_audio_robot_via_daemon(self) -> None:
+        """Play audio on the robot speaker through the daemon's REST API.
+
+        Used when the WebRTC audio send chain is unavailable. The daemon takes
+        whole files rather than a stream, so chunks are coalesced per utterance
+        (flushed once the queue goes quiet) and uploaded as a single WAV. That
+        costs some latency but is audible, where the WebRTC path is not.
+        """
+        # Gap of silence that marks the end of an utterance worth flushing.
+        flush_after = 0.25
+        self._daemon_audio_fallback = True
+        tmp_dir = tempfile.mkdtemp(prefix="reachy-gemini-tts-")
+        wav_path = os.path.join(tmp_dir, "reply.wav")
+        buf = bytearray()
+
+        while True:
+            try:
+                if not buf:
+                    # Nothing buffered: wait indefinitely for the next chunk.
+                    buf.extend(await self.audio_in_queue.get())
+                    continue
+
+                try:
+                    chunk = await asyncio.wait_for(
+                        self.audio_in_queue.get(), timeout=flush_after
+                    )
+                except asyncio.TimeoutError:
+                    # Queue went quiet -- flush what we have as one utterance.
+                    pcm, buf = bytes(buf), bytearray()
+                    await asyncio.to_thread(self._write_wav, pcm, wav_path)
+                    await asyncio.to_thread(self.robot.media.play_sound, wav_path)
+                    continue
+
+                buf.extend(chunk)
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"Daemon audio playback error: {e}")
+                buf.clear()
                 await asyncio.sleep(0.01)
 
     async def stream_camera(self) -> None:

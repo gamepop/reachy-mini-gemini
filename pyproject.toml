@@ -19,7 +19,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "reachy_mini",
+    "reachy_mini>=1.11",  # needs the renamed "webrtc" media backend
     "google-genai>=1.0.0",
     "pyaudio",
     "numpy",
@@ -30,7 +30,7 @@ dependencies = [
 
 [project.optional-dependencies]
 wireless = [
-    "reachy_mini[gstreamer]",
+    "reachy_mini[gstreamer]>=1.11",
 ]
 dev = [
     "pytest",
@@ -44,4 +44,8 @@ reachy-mini-gemini = "reachy_mini_gemini_app.main:main"
 reachy_mini_gemini_app = "reachy_mini_gemini_app.main:ReachyMiniGeminiApp"
 
 [tool.setuptools.packages.find]
+# Pin the project root: a stray top-level "src/" directory otherwise
+# makes setuptools auto-detect a src-layout and the editable install
+# resolves to src/, where the package does not live.
+where = ["."]
 include = ["reachy_mini_gemini_app*"]

@@ -173,6 +173,9 @@ def run(
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
+    # Only tear down a robot we created ourselves; a caller-supplied robot
+    # (e.g. from the dashboard) stays owned by the caller.
+    owns_robot = robot is None
     if robot is None:
         robot = create_robot(args)
 
@@ -186,7 +189,17 @@ def run(
         loop.run_until_complete(run_conversation(robot, stop_event, args))
     finally:
         loop.close()
-        robot.client.disconnect()
+        if owns_robot:
+            # Mirror ReachyMini.__exit__: hand media back to the daemon, then
+            # close it before disconnecting. A "no_media" client makes the
+            # daemon release its camera/mic, which stops its WebRTC server and
+            # breaks other clients (phone app, dashboard) until re-acquired.
+            # An open WebRTC backend also keeps non-daemon threads alive and
+            # the process hangs on exit.
+            if getattr(robot, "media_released", False):
+                robot.acquire_media()
+            robot.media_manager.close()
+            robot.client.disconnect()
 
 
 class ReachyMiniGeminiApp(ReachyMiniApp):
@@ -257,8 +270,11 @@ def create_robot(args: argparse.Namespace) -> ReachyMini:
         # Wired connection with media
         return ReachyMini(media_backend="default")
 
-    # Wireless with media - try backends in order of preference
-    backends = ["gstreamer", "webrtc", "default"]
+    # Wireless with media - try backends in order of preference.
+    # SDK >=1.11 renamed the backends: "gstreamer" is a deprecated alias for
+    # "local" (same-machine IPC) and fails for a remote robot, so a wireless
+    # client must ask for "webrtc" first.
+    backends = ["webrtc", "gstreamer", "default"]
 
     for backend in backends:
         try:
